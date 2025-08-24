@@ -21,7 +21,7 @@ except ImportError:
 # Provider Anthropic avec support batch
 # =============================================================================
 
-class AnthropicProvider(BaseProvider, AnthropicBatchMixin):
+class AnthropicProvider(AnthropicBatchMixin, BaseProvider):
     """Provider pour le modèle Anthropic claude-sonnet-4 avec support des batches"""
     
     def __init__(self, model_name: str, api_key: str):

@@ -21,7 +21,7 @@ except ImportError:
 # Provider GPT-5 avec support batch
 # =============================================================================
 
-class GPT5Provider(BaseProvider, OpenAIBatchMixin):
+class GPT5Provider(OpenAIBatchMixin, BaseProvider):
     """
     Provider spécifique pour GPT-5 avec ses paramètres uniques et support des batches.
     GPT-5 introduit reasoning_effort et verbosity à la place de temperature/top_p.

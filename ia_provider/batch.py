@@ -32,9 +32,9 @@ except ImportError:
 class BatchRequest:
     """Représente une requête unique pour l'API Batch d'OpenAI."""
     custom_id: str
+    body: Dict
     method: str = "POST"
     url: str = "/v1/chat/completions"
-    body: Dict
 
     def __post_init__(self):
         """Validation après initialisation."""
