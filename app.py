@@ -530,6 +530,7 @@ with st.expander("Suivi des lots (Batches)"):
                     if history:
                         import pandas as pd
                         df = pd.DataFrame(history)
+                        # Afficher le statut unifié pour masquer les spécificités des providers
                         if 'unified_status' in df.columns:
                             st.dataframe(df[['id', 'unified_status', 'created_at', 'provider']])
                         else:

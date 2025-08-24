@@ -219,7 +219,13 @@ class BatchJobManager:
                 self.client = None
 
     def _unify_status(self, batch_info: Dict[str, Any]) -> Dict[str, Any]:
-        """Ajoute un statut unifié à un dictionnaire d'informations de lot."""
+        """Ajoute un statut unifié à un dictionnaire d'informations de lot.
+
+        Normalise les valeurs spécifiques au provider pour exposer un ensemble
+        commun de statuts : ``running``, ``completed``, ``failed`` ou
+        ``unknown``. Le champ de statut original est conservé pour les besoins
+        de débogage.
+        """
 
         unified_status = "unknown"
         provider = batch_info.get('provider', self.provider_type)
