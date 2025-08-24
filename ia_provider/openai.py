@@ -21,7 +21,7 @@ except ImportError:
 # Provider OpenAI avec support batch
 # =============================================================================
 
-class OpenAIProvider(BaseProvider, OpenAIBatchMixin):
+class OpenAIProvider(OpenAIBatchMixin, BaseProvider):
     """Provider pour le modèle OpenAI gpt-4.1 avec support des batches"""
     
     def __init__(self, model_name: str, api_key: str):
