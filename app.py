@@ -528,7 +528,12 @@ with st.expander("Suivi des lots (Batches)"):
                     history = batch_manager.get_history(limit=20)
 
                     if history:
-                        st.dataframe(history)
+                        import pandas as pd
+                        df = pd.DataFrame(history)
+                        if 'unified_status' in df.columns:
+                            st.dataframe(df[['id', 'unified_status', 'created_at', 'provider']])
+                        else:
+                            st.dataframe(df)
                     else:
                         st.info("Aucun lot trouvé pour ce provider.")
             except Exception as e:

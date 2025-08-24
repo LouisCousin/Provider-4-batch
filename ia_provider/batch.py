@@ -217,6 +217,31 @@ class BatchJobManager:
             except Exception as e:
                 print(f"❌ Erreur initialisation BatchJobManager: {e}")
                 self.client = None
+
+    def _unify_status(self, batch_info: Dict[str, Any]) -> Dict[str, Any]:
+        """Ajoute un statut unifié à un dictionnaire d'informations de lot."""
+
+        unified_status = "unknown"
+        provider = batch_info.get('provider', self.provider_type)
+        raw_status = batch_info.get('status')
+
+        if provider == "anthropic":
+            if raw_status == "ended":
+                unified_status = "completed"
+            elif raw_status in ["processing", "created"]:
+                unified_status = "running"
+            elif raw_status in ["canceling", "expired"]:
+                unified_status = "failed"
+        else:  # OpenAI par défaut
+            if raw_status == "completed":
+                unified_status = "completed"
+            elif raw_status in ["validating", "in_progress"]:
+                unified_status = "running"
+            elif raw_status in ['failed', 'expired', 'cancelled']:
+                unified_status = "failed"
+
+        batch_info['unified_status'] = unified_status
+        return batch_info
     
     def get_history(self, limit: int = 50) -> List[Dict]:
         """
@@ -236,11 +261,12 @@ class BatchJobManager:
                 # API Anthropic pour lister les batches
                 batches = self.client.beta.messages.batches.list(limit=limit)
                 batch_list = []
-                
+
                 for batch in batches.data:
                     batch_info = {
                         'id': batch.id,
                         'status': batch.processing_status,
+                        'processing_status': batch.processing_status,
                         'created_at': batch.created_at,
                         'request_counts': {
                             'total': batch.request_counts.total,
@@ -256,7 +282,7 @@ class BatchJobManager:
                 # API OpenAI pour lister les batches
                 batches = self.client.batches.list(limit=limit)
                 batch_list = []
-                
+
                 for batch in batches.data:
                     batch_info = {
                         'id': batch.id,
@@ -271,9 +297,9 @@ class BatchJobManager:
                         'provider': 'openai'
                     }
                     batch_list.append(batch_info)
-            
-            return batch_list
-            
+
+            return [self._unify_status(batch) for batch in batch_list]
+
         except Exception as e:
             print(f"❌ Erreur récupération historique: {str(e)}")
             return []
@@ -295,10 +321,11 @@ class BatchJobManager:
             if self.provider_type == "anthropic":
                 # API Anthropic
                 batch = self.client.beta.messages.batches.retrieve(batch_id)
-                
+
                 batch_info = {
                     'id': batch.id,
                     'status': batch.processing_status,
+                    'processing_status': batch.processing_status,
                     'created_at': batch.created_at,
                     'expires_at': batch.expires_at,
                     'request_counts': {
@@ -315,9 +342,9 @@ class BatchJobManager:
                 # API OpenAI
                 if not batch_id.startswith('batch_'):
                     return None
-                    
+
                 batch = self.client.batches.retrieve(batch_id)
-                
+
                 batch_info = {
                     'id': batch.id,
                     'status': batch.status,
@@ -331,9 +358,9 @@ class BatchJobManager:
                     'metadata': getattr(batch, 'metadata', {}),
                     'provider': 'openai'
                 }
-            
-            return batch_info
-            
+
+            return self._unify_status(batch_info)
+
         except Exception as e:
             print(f"❌ Erreur recherche batch {batch_id}: {str(e)}")
             return None
