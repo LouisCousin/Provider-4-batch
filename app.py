@@ -18,6 +18,7 @@ from typing import Optional, List, Dict
 # Import du module IA Provider (changement d'import)
 try:
     from ia_provider import manager, APIError, UnknownModelError
+    from ia_provider.batch import BatchRequest, BatchJobManager
 except ImportError:
     st.error("Module ia_provider non trouvé. Assurez-vous que le package ia_provider est dans le même dossier.")
     st.stop()
@@ -322,7 +323,14 @@ with st.sidebar:
         help="Active le mode conversation pour garder le contexte"
     )
     st.session_state.conversation_mode = conversation_mode
-    
+
+    st.subheader("🚀 Mode d'exécution")
+    execution_mode = st.radio(
+        "Choisissez le type de traitement",
+        ('Réponse immédiate (Synchrone)', 'Traitement par lot (Batch)'),
+        help="Synchrone pour une réponse directe, Batch pour une tâche de fond."
+    )
+
     if conversation_mode and st.button("🗑️ Effacer la conversation"):
         clear_conversation()
         st.rerun()
@@ -386,64 +394,65 @@ if generate_button and prompt:
         st.error(f"⚠️ Veuillez entrer une clé API {provider}")
     else:
         try:
-            with st.spinner(f"Génération avec {selected_model}..."):
-                # Obtenir le provider
-                provider_instance = manager.get_provider(selected_model, api_key)
-                
-                # Préparer les paramètres selon le modèle
-                if selected_model.startswith("gpt-5"):
-                    # Paramètres GPT-5
-                    params = {
-                        'reasoning_effort': reasoning_effort,
-                        'verbosity': verbosity,
-                        'max_tokens': max_tokens
-                    }
-                    # Ajouter temperature seulement en mode minimal
-                    if reasoning_effort == "minimal" and 'temperature' in locals() and temperature is not None:
-                        params['temperature'] = temperature
-                else:
-                    # Paramètres classiques
-                    params = {
-                        'temperature': temperature,
-                        'max_tokens': max_tokens
-                    }
-                    
-                    # Ajouter les paramètres avancés s'ils existent
-                    if 'top_p' in locals():
-                        params['top_p'] = top_p
-                    if 'frequency_penalty' in locals():
-                        params['frequency_penalty'] = frequency_penalty
-                    if 'presence_penalty' in locals():
-                        params['presence_penalty'] = presence_penalty
-                
-                # Ajouter les paramètres spécifiques pour Claude
-                if selected_model == "claude-sonnet-4-20250514" and 'use_thinking' in locals() and use_thinking:
-                    params['thinking_budget'] = thinking_budget
-                
-                # Générer la réponse
-                if st.session_state.conversation_mode and st.session_state.messages:
-                    # Mode conversation
-                    add_message("user", prompt)
-                    messages_for_api = [
-                        {"role": msg["role"], "content": msg["content"]}
-                        for msg in st.session_state.messages
-                    ]
-                    response = provider_instance.chatter(messages_for_api, **params)
-                    add_message("assistant", response)
-                else:
-                    # Mode simple
-                    response = provider_instance.generer_reponse(prompt, **params)
-                
+            # Obtenir le provider
+            provider_instance = manager.get_provider(selected_model, api_key)
+
+            # Préparer les paramètres selon le modèle
+            if selected_model.startswith("gpt-5"):
+                # Paramètres GPT-5
+                params = {
+                    'reasoning_effort': reasoning_effort,
+                    'verbosity': verbosity,
+                    'max_tokens': max_tokens
+                }
+                # Ajouter temperature seulement en mode minimal
+                if reasoning_effort == "minimal" and 'temperature' in locals() and temperature is not None:
+                    params['temperature'] = temperature
+            else:
+                # Paramètres classiques
+                params = {
+                    'temperature': temperature,
+                    'max_tokens': max_tokens
+                }
+
+                # Ajouter les paramètres avancés s'ils existent
+                if 'top_p' in locals():
+                    params['top_p'] = top_p
+                if 'frequency_penalty' in locals():
+                    params['frequency_penalty'] = frequency_penalty
+                if 'presence_penalty' in locals():
+                    params['presence_penalty'] = presence_penalty
+
+            # Ajouter les paramètres spécifiques pour Claude
+            if selected_model == "claude-sonnet-4-20250514" and 'use_thinking' in locals() and use_thinking:
+                params['thinking_budget'] = thinking_budget
+
+            if execution_mode == 'Réponse immédiate (Synchrone)':
+                with st.spinner(f"Génération avec {selected_model}..."):
+                    # Générer la réponse
+                    if st.session_state.conversation_mode and st.session_state.messages:
+                        # Mode conversation
+                        add_message("user", prompt)
+                        messages_for_api = [
+                            {"role": msg["role"], "content": msg["content"]}
+                            for msg in st.session_state.messages
+                        ]
+                        response = provider_instance.chatter(messages_for_api, **params)
+                        add_message("assistant", response)
+                    else:
+                        # Mode simple
+                        response = provider_instance.generer_reponse(prompt, **params)
+
                 # Incrémenter le compteur
                 st.session_state.generation_count += 1
-                
+
                 # Afficher la réponse
                 st.success("✅ Réponse générée avec succès!")
-                
+
                 with st.container():
                     st.markdown("### 🤖 Réponse")
                     st.write(response)
-                    
+
                     # Métadonnées
                     col1, col2, col3 = st.columns(3)
                     with col1:
@@ -455,28 +464,75 @@ if generate_button and prompt:
                             st.caption(f"Temperature: {temperature}")
                     with col3:
                         st.caption(f"Tokens max: {max_tokens}")
-                
+
                 # Option de copie
                 st.code(response, language=None)
-                
+            else:
+                try:
+                    with st.spinner(f"Soumission du lot vers {selected_model}..."):
+                        request_body = {
+                            "model": selected_model,
+                            "messages": [{"role": "user", "content": prompt}],
+                            **params
+                        }
+
+                        batch_request = BatchRequest(
+                            custom_id=f"req_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+                            body=request_body
+                        )
+
+                        batch_id = provider_instance.submit_batch(requests=[batch_request])
+
+                    st.success("✅ Tâche soumise avec succès en traitement par lot.")
+                    st.info(f"**ID du lot (Batch ID) :** `{batch_id}`")
+                    st.caption("Vous pouvez suivre son état dans l'onglet 'Suivi des lots'.")
+                except APIError as e:
+                    st.error(f"❌ Erreur lors de la soumission du lot : {e}")
+                except Exception as e:
+                    st.error(f"❌ Erreur inattendue : {e}")
+
         except APIError as e:
             st.error(f"❌ Erreur API: {e}")
-            
+
             # Proposer un fallback
             st.warning("💡 Voulez-vous essayer avec un autre modèle?")
-            
+
             # Déterminer un modèle de fallback approprié
             if selected_model.startswith("gpt"):
                 other_model = "claude-sonnet-4-20250514"
             else:
                 other_model = "gpt-4.1"
-                
+
             if st.button(f"Essayer {other_model}"):
                 st.session_state.last_model = other_model
                 st.rerun()
-                
+
         except Exception as e:
             st.error(f"❌ Erreur inattendue: {e}")
+
+# Section de suivi des lots
+st.divider()
+with st.expander("Suivi des lots (Batches)"):
+    st.subheader("Historique des tâches de fond")
+
+    provider_type_for_batch = get_model_provider_name(selected_model).lower()
+    api_key_for_batch = get_api_key(selected_model)
+
+    if not api_key_for_batch:
+        st.warning("Veuillez fournir une clé API pour afficher l'historique des lots.")
+    else:
+        if st.button("🔄 Rafraîchir l'historique"):
+            try:
+                with st.spinner("Récupération de l'historique..."):
+                    batch_manager = BatchJobManager(api_key=api_key_for_batch, provider_type=provider_type_for_batch)
+                    history = batch_manager.get_history(limit=20)
+
+                    if history:
+                        st.dataframe(history)
+                    else:
+                        st.info("Aucun lot trouvé pour ce provider.")
+            except Exception as e:
+                st.error(f"Impossible de récupérer l'historique : {e}")
 
 # Footer
 st.divider()
