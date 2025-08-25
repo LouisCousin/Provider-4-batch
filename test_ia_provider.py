@@ -475,6 +475,38 @@ class TestGPT5Provider:
         assert call_kwargs.get('max_completion_tokens') == 123
         assert 'temperature' not in call_kwargs
 
+    @patch('ia_provider.gpt5.openai')
+    def test_gpt5_nano_fallback_no_classic_params(self, mock_openai):
+        """Le fallback ne doit pas réinjecter les paramètres classiques pour gpt-5-nano."""
+
+        mock_client = MagicMock()
+        mock_openai.OpenAI.return_value = mock_client
+
+        # Première tentative : erreur sur reasoning_effort/verbosity
+        error = Exception("reasoning_effort not supported")
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock(message=MagicMock(content="OK"))]
+        mock_client.chat.completions.create.side_effect = [error, mock_response]
+
+        provider = GPT5Provider("gpt-5-nano", "test-key")
+
+        provider.generer_reponse(
+            "Test", temperature=0.9, top_p=0.5,
+            frequency_penalty=0.2, presence_penalty=0.1
+        )
+
+        # Assurer que deux appels ont été effectués (tentative + fallback)
+        assert mock_client.chat.completions.create.call_count == 2
+        fallback_kwargs = mock_client.chat.completions.create.call_args_list[1][1]
+
+        # Les paramètres classiques ne doivent pas être présents
+        for key in ['temperature', 'top_p', 'frequency_penalty', 'presence_penalty']:
+            assert key not in fallback_kwargs
+
+        # Les paramètres reasoning_effort/verbosity doivent être absents
+        assert 'reasoning_effort' not in fallback_kwargs
+        assert 'verbosity' not in fallback_kwargs
+
 # =============================================================================
 # Tests du provider Anthropic (Claude Sonnet 4)
 # =============================================================================
