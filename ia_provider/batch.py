@@ -45,8 +45,16 @@ def _load_local_batch_history() -> List[Dict]:
     return []
 
 
-def _save_batch_to_local_history(batch_id: str, provider: str) -> None:
-    """Ajoute un lot soumis à l'historique local sans créer de doublon."""
+def _save_batch_to_local_history(
+    batch_id: str, provider: str, metadata: Optional[Dict[str, Any]] = None
+) -> None:
+    """Ajoute un lot soumis à l'historique local sans créer de doublon.
+
+    Args:
+        batch_id: Identifiant du lot.
+        provider: Nom du fournisseur (openai/anthropic).
+        metadata: Métadonnées optionnelles à stocker (modèle, nb de requêtes...).
+    """
     path = Path(HISTORY_FILE)
     history = _load_local_batch_history()
 
@@ -58,6 +66,7 @@ def _save_batch_to_local_history(batch_id: str, provider: str) -> None:
         "provider": provider,
         "status": "running",
         "submitted_at": datetime.now().isoformat(),
+        "metadata": metadata or {},
     }
     history.insert(0, new_entry)
     try:
@@ -169,7 +178,13 @@ class OpenAIBatchMixin:
                 metadata=metadata or {}
             )
             print(f"✅ Batch créé avec succès: {batch_job.id}")
-            _save_batch_to_local_history(batch_job.id, "openai")
+            local_meta = {
+                "model": requests[0].body.get("model"),
+                "total_requests": len(requests),
+            }
+            if metadata:
+                local_meta.update(metadata)
+            _save_batch_to_local_history(batch_job.id, "openai", local_meta)
             return batch_job.id
         except Exception as e:
             raise APIError(f"Échec de la création du batch: {e}")
@@ -233,7 +248,13 @@ class AnthropicBatchMixin:
             )
 
             print(f"✅ Batch Anthropic créé avec succès: {batch.id}")
-            _save_batch_to_local_history(batch.id, "anthropic")
+            local_meta = {
+                "model": batch_requests[0]["params"].get("model", self.model_name),
+                "total_requests": len(batch_requests),
+            }
+            if metadata:
+                local_meta.update(metadata)
+            _save_batch_to_local_history(batch.id, "anthropic", local_meta)
             return batch.id
 
         except Exception as e:
@@ -296,24 +317,25 @@ class BatchJobManager:
         if raw_status in {"running", "completed", "failed"}:
             unified_status = raw_status
         elif provider == "anthropic":
-            status_map = {
-                "ended": "completed",
-                "processing": "running",
+            anthropic_map = {
                 "created": "running",
+                "processing": "running",
+                "ended": "completed",
                 "expired": "failed",
                 "canceling": "running",
             }
-            unified_status = status_map.get(raw_status, "unknown")
+            unified_status = anthropic_map.get(raw_status, "unknown")
         else:  # OpenAI par défaut
-            status_map = {
-                "completed": "completed",
+            openai_map = {
                 "validating": "running",
                 "in_progress": "running",
+                "completed": "completed",
                 "failed": "failed",
                 "expired": "failed",
+                "cancelling": "running",
                 "cancelled": "failed",
             }
-            unified_status = status_map.get(raw_status, "unknown")
+            unified_status = openai_map.get(raw_status, "unknown")
 
         batch_info['unified_status'] = unified_status
         return batch_info
@@ -330,20 +352,23 @@ class BatchJobManager:
 
         counts = {
             'total': _get(rc, 'total'),
-            'processing': _get(rc, 'processing'),
+            'processing': _get(rc, 'processing') or _get(rc, 'in_progress'),
             'succeeded': _get(rc, 'succeeded'),
             'errored': _get(rc, 'errored'),
-            'canceled': _get(rc, 'canceled'),
+            'canceled': _get(rc, 'canceled') or _get(rc, 'cancelled'),
         }
 
         if provider != 'anthropic':
             # OpenAI utilise 'completed' et 'failed'
             completed = _get(rc, 'completed')
             failed = _get(rc, 'failed')
+            cancelled = _get(rc, 'cancelled')
             if completed is not None:
                 counts['succeeded'] = completed
             if failed is not None:
                 counts['errored'] = failed
+            if cancelled is not None:
+                counts['canceled'] = cancelled
 
         # Retirer les entrées None pour alléger la structure
         return {k: v for k, v in counts.items() if v is not None}
@@ -551,12 +576,16 @@ class BatchJobManager:
 
             # Provider OpenAI par défaut
             batch = self.client.batches.retrieve(batch_id)
-            if batch.status != "completed":
-                print(f"⚠️ Batch {batch_id} non terminé (statut: {batch.status})")
+            if getattr(batch, "status", "") != "completed":
+                print(f"⚠️ Batch {batch_id} non terminé (statut: {getattr(batch, 'status', 'N/A')})")
                 return []
 
+            # Traiter les succès
             if getattr(batch, "output_file_id", None):
-                success_content = self.client.files.content(batch.output_file_id).text
+                try:
+                    success_content = self.client.files.content(batch.output_file_id).text
+                except Exception:
+                    success_content = ""
                 for line in success_content.strip().split("\n"):
                     if not line.strip():
                         continue
@@ -582,8 +611,12 @@ class BatchJobManager:
                         )
                     )
 
+            # Traiter les erreurs
             if getattr(batch, "error_file_id", None):
-                error_content = self.client.files.content(batch.error_file_id).text
+                try:
+                    error_content = self.client.files.content(batch.error_file_id).text
+                except Exception:
+                    error_content = ""
                 for line in error_content.strip().split("\n"):
                     if not line.strip():
                         continue
