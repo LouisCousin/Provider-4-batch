@@ -85,26 +85,28 @@ class TestBatchStatusUnification:
     def test_get_status_and_history_include_unified_status_openai(self):
         manager = BatchJobManager(api_key="", provider_type="openai")
 
+        rc_status = SimpleNamespace(total=3, processing=0, completed=2, failed=1)
         batch_status = SimpleNamespace(
             id="batch_b1",
             status="in_progress",
             created_at=0,
             endpoint="/v1/chat",
             completion_window="24h",
-            request_counts=None,
+            request_counts=rc_status,
             output_file_id=None,
             error_file_id=None,
             input_file_id=None,
             metadata={},
         )
 
+        rc_history = SimpleNamespace(total=1, processing=0, completed=1, failed=0)
         batch_history = SimpleNamespace(
             id="b2",
             status="completed",
             created_at=0,
             endpoint="/v1/chat",
             completion_window="24h",
-            request_counts=None,
+            request_counts=rc_history,
             output_file_id=None,
             error_file_id=None,
             metadata={},
@@ -120,11 +122,17 @@ class TestBatchStatusUnification:
         status = manager.get_status("batch_b1")
         assert status["status"] == "in_progress"
         assert status["unified_status"] == "running"
+        assert status["request_counts"]["total"] == 3
+        assert status["request_counts"]["succeeded"] == 2
+        assert status["request_counts"]["errored"] == 1
 
         history = manager.get_history(limit=1)
         assert len(history) == 1
         assert history[0]["status"] == "completed"
         assert history[0]["unified_status"] == "completed"
+        assert history[0]["request_counts"]["total"] == 1
+        assert history[0]["request_counts"]["succeeded"] == 1
+        assert history[0]["request_counts"]["errored"] == 0
         assert "unified_status" in status and "unified_status" in history[0]
 
 
@@ -153,6 +161,9 @@ class TestAnthropicBatchManagement:
         list_mock.assert_called_once_with(limit=5)
         assert history[0]["id"] == "b1"
         assert history[0]["unified_status"] == "running"
+        assert history[0]["request_counts"]["total"] == 1
+        assert history[0]["request_counts"]["succeeded"] == 0
+        assert history[0]["request_counts"]["errored"] == 0
 
     def test_get_status(self):
         batch_obj = SimpleNamespace(
@@ -178,6 +189,8 @@ class TestAnthropicBatchManagement:
         retrieve_mock.assert_called_once_with("b1")
         assert status["unified_status"] == "completed"
         assert status["id"] == "b1"
+        assert status["request_counts"]["succeeded"] == 1
+        assert status["request_counts"]["errored"] == 0
 
     def test_get_results(self):
         retrieve_mock = MagicMock(return_value=SimpleNamespace(processing_status="ended"))
@@ -218,6 +231,7 @@ class TestAnthropicBatchManagement:
         assert len(results) == 2
         assert results[0].status == "succeeded"
         assert results[0].response["content"] == "ok"
+        assert results[0].clean_response == "ok"
         assert results[1].status == "failed"
         assert results[1].error["message"] == "boom"
 
@@ -233,6 +247,33 @@ class TestAnthropicBatchManagement:
 
         assert manager.cancel_batch("b1") is True
         cancel_mock.assert_called_once_with("b1")
+
+
+class TestOpenAIBatchResults:
+    def test_get_results_openai_clean_response(self):
+        batch_obj = SimpleNamespace(status="completed", output_file_id="f1", error_file_id=None)
+        retrieve_mock = MagicMock(return_value=batch_obj)
+
+        line = json.dumps({
+            "custom_id": "1",
+            "response": {"body": {"choices": [{"message": {"content": "hello"}}]}},
+        })
+        files_mock = MagicMock(return_value=SimpleNamespace(text=line))
+
+        client = SimpleNamespace(
+            batches=SimpleNamespace(retrieve=retrieve_mock),
+            files=SimpleNamespace(content=files_mock),
+        )
+
+        manager = BatchJobManager(api_key="", provider_type="openai")
+        manager.client = client
+
+        results = manager.get_results("b1")
+        retrieve_mock.assert_called_once_with("b1")
+        files_mock.assert_called_once_with("f1")
+        assert len(results) == 1
+        assert results[0].clean_response == "hello"
+        assert results[0].response["choices"][0]["message"]["content"] == "hello"
 
 
 # =============================================================================
