@@ -91,8 +91,12 @@ class GPT5Provider(OpenAIBatchMixin, BaseProvider):
         
         # Filtrer les paramètres None
         params = {k: v for k, v in params.items() if v is not None}
-        
+
         return params
+
+    def preparer_parametres_batch(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Prépare et filtre les paramètres pour une requête batch GPT-5."""
+        return self._preparer_parametres_gpt5(**params)
     
     def generer_reponse(self, prompt: str, **kwargs) -> str:
         """
