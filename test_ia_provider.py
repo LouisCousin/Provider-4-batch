@@ -128,6 +128,113 @@ class TestBatchStatusUnification:
         assert "unified_status" in status and "unified_status" in history[0]
 
 
+class TestAnthropicBatchManagement:
+    """Tests de gestion des lots pour Anthropic."""
+
+    def test_get_history(self):
+        batch = SimpleNamespace(
+            id="b1",
+            processing_status="processing",
+            created_at="2024-01-01",
+            request_counts=SimpleNamespace(
+                total=1, processing=1, succeeded=0, errored=0, canceled=0
+            ),
+        )
+        list_mock = MagicMock(return_value=SimpleNamespace(data=[batch]))
+        client = SimpleNamespace(
+            beta=SimpleNamespace(
+                messages=SimpleNamespace(batches=SimpleNamespace(list=list_mock))
+            )
+        )
+        manager = BatchJobManager(api_key="", provider_type="anthropic")
+        manager.client = client
+
+        history = manager.get_history(limit=5)
+        list_mock.assert_called_once_with(limit=5)
+        assert history[0]["id"] == "b1"
+        assert history[0]["unified_status"] == "running"
+
+    def test_get_status(self):
+        batch_obj = SimpleNamespace(
+            id="b1",
+            processing_status="ended",
+            created_at="2024-01-01",
+            expires_at="2024-01-02",
+            request_counts=SimpleNamespace(
+                total=1, processing=0, succeeded=1, errored=0, canceled=0
+            ),
+            results_url="http://example",
+        )
+        retrieve_mock = MagicMock(return_value=batch_obj)
+        client = SimpleNamespace(
+            beta=SimpleNamespace(
+                messages=SimpleNamespace(batches=SimpleNamespace(retrieve=retrieve_mock))
+            )
+        )
+        manager = BatchJobManager(api_key="", provider_type="anthropic")
+        manager.client = client
+
+        status = manager.get_status("b1")
+        retrieve_mock.assert_called_once_with("b1")
+        assert status["unified_status"] == "completed"
+        assert status["id"] == "b1"
+
+    def test_get_results(self):
+        retrieve_mock = MagicMock(return_value=SimpleNamespace(processing_status="ended"))
+
+        success_result = SimpleNamespace(
+            custom_id="1",
+            result=SimpleNamespace(
+                type="succeeded",
+                message=SimpleNamespace(
+                    role="assistant", content=[SimpleNamespace(text="ok")]
+                ),
+            ),
+            model_dump=lambda: {"id": 1},
+        )
+        error_obj = SimpleNamespace(message="boom", model_dump=lambda: {"message": "boom"})
+        error_result = SimpleNamespace(
+            custom_id="2",
+            result=SimpleNamespace(type="errored", error=error_obj),
+            model_dump=lambda: {"id": 2},
+        )
+        results_mock = MagicMock(return_value=[success_result, error_result])
+
+        client = SimpleNamespace(
+            beta=SimpleNamespace(
+                messages=SimpleNamespace(
+                    batches=SimpleNamespace(
+                        retrieve=retrieve_mock, results=results_mock
+                    )
+                )
+            )
+        )
+        manager = BatchJobManager(api_key="", provider_type="anthropic")
+        manager.client = client
+
+        results = manager.get_results("b1")
+        retrieve_mock.assert_called_once_with("b1")
+        results_mock.assert_called_once_with("b1")
+        assert len(results) == 2
+        assert results[0].status == "succeeded"
+        assert results[0].response["content"] == "ok"
+        assert results[1].status == "failed"
+        assert results[1].error["message"] == "boom"
+
+    def test_cancel_batch(self):
+        cancel_mock = MagicMock()
+        client = SimpleNamespace(
+            beta=SimpleNamespace(
+                messages=SimpleNamespace(batches=SimpleNamespace(cancel=cancel_mock))
+            )
+        )
+        manager = BatchJobManager(api_key="", provider_type="anthropic")
+        manager.client = client
+
+        assert manager.cancel_batch("b1") is True
+        cancel_mock.assert_called_once_with("b1")
+
+
 # =============================================================================
 # Tests du ProviderManager
 # =============================================================================
