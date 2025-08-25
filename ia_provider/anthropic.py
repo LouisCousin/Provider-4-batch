@@ -72,8 +72,12 @@ class AnthropicProvider(AnthropicBatchMixin, BaseProvider):
             }
         elif 'thinking' in kwargs:
             params['thinking'] = kwargs['thinking']
-        
+
         return params
+
+    def preparer_parametres_batch(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Prépare et filtre les paramètres pour une requête batch Anthropic."""
+        return self._preparer_parametres_anthropic(**params)
     
     def generer_reponse(self, prompt: str, **kwargs) -> str:
         """

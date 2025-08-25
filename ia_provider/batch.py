@@ -135,15 +135,29 @@ class OpenAIBatchMixin:
         
         if not requests:
             raise ValueError("La liste de requêtes ne peut pas être vide")
-        
+
         # 1. Conversion en JSONL
         jsonl_lines = []
         for req in requests:
+            prepared_body = req.body.copy()
+            model_params = {k: v for k, v in prepared_body.items() if k not in ['model', 'messages']}
+
+            if hasattr(self, 'preparer_parametres_batch'):
+                final_params = self.preparer_parametres_batch(model_params)
+            else:
+                final_params = model_params
+
+            prepared_body.update(final_params)
+
+            for key in list(prepared_body.keys()):
+                if key not in ['model', 'messages'] and key not in final_params:
+                    del prepared_body[key]
+
             batch_line = {
                 "custom_id": req.custom_id,
                 "method": req.method,
                 "url": req.url,
-                "body": req.body
+                "body": prepared_body
             }
             jsonl_lines.append(json.dumps(batch_line))
         
@@ -205,25 +219,25 @@ class AnthropicBatchMixin:
         
         if not requests:
             raise ValueError("La liste de requêtes ne peut pas être vide")
-        
+
         # Convertir les BatchRequest au format Anthropic
         batch_requests = []
         for req in requests:
-            # Anthropic utilise un format différent
+            body_params = {k: v for k, v in req.body.items() if k not in ['model', 'messages']}
+
+            if hasattr(self, '_preparer_parametres_anthropic'):
+                prepared_params = self._preparer_parametres_anthropic(**body_params)
+            else:
+                prepared_params = body_params
+
             anthropic_request = {
                 "custom_id": req.custom_id,
                 "params": {
                     "model": req.body.get("model", self.model_name),
                     "messages": req.body.get("messages", []),
-                    "max_tokens": req.body.get("max_tokens", 1000)
+                    **prepared_params
                 }
             }
-            
-            # Ajouter les paramètres optionnels s'ils existent
-            for param in ["temperature", "top_p", "top_k", "stop_sequences"]:
-                if param in req.body:
-                    anthropic_request["params"][param] = req.body[param]
-            
             batch_requests.append(anthropic_request)
         
         try:

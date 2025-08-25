@@ -162,6 +162,11 @@ class BaseProvider(ABC):
             APIError: Si le provider ne supporte pas les batches
         """
         pass
+
+    @abstractmethod
+    def preparer_parametres_batch(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Prépare et filtre les paramètres pour une requête de type batch."""
+        pass
     
     def _preparer_parametres(self, **kwargs) -> Dict[str, Any]:
         """

@@ -60,6 +60,14 @@ class OpenAIProvider(OpenAIBatchMixin, BaseProvider):
         
         # Filtrer pour ne garder que les paramètres supportés
         return {k: v for k, v in params.items() if k in parametres_supportes}
+
+    def preparer_parametres_batch(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Prépare et filtre les paramètres pour une requête batch OpenAI."""
+        prepared_params = self._preparer_parametres(**params)
+        filtered_params = self._filtrer_parametres_openai(prepared_params)
+        if 'max_tokens' in filtered_params and self.model_name.startswith('gpt-4.1'):
+            filtered_params['max_completion_tokens'] = filtered_params.pop('max_tokens')
+        return filtered_params
     
     def generer_reponse(self, prompt: str, **kwargs) -> str:
         """
