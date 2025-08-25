@@ -6,6 +6,7 @@ Tests pour gpt-4.1, claude-sonnet-4-20250514 et GPT-5
 
 import pytest
 import os
+import json
 from unittest.mock import Mock, MagicMock, patch
 from typing import Dict, Any
 from types import SimpleNamespace
@@ -23,7 +24,7 @@ from ia_provider import (
 from ia_provider.openai import OpenAIProvider
 from ia_provider.anthropic import AnthropicProvider
 from ia_provider.gpt5 import GPT5Provider
-from ia_provider.batch import BatchJobManager
+from ia_provider.batch import BatchJobManager, BatchResult
 
 
 # =============================================================================
@@ -561,6 +562,138 @@ class TestSubmitBatchPersists:
         returned_id = dummy.submit_batch([req])
         assert returned_id == "batch_a1"
         assert called == {"id": "batch_a1", "provider": "anthropic"}
+
+
+# =============================================================================
+# Tests pour la récupération des résultats de batch
+# =============================================================================
+
+
+class TestBatchGetResults:
+    """Vérifie que get_results retourne des ``BatchResult`` normalisés."""
+
+    # ------------------------------------------------------------------
+    # Utilitaires
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _ns(**kwargs):
+        obj = SimpleNamespace(**kwargs)
+        obj.model_dump = lambda: obj.__dict__
+        return obj
+
+    # ------------------------------------------------------------------
+    # OpenAI
+    # ------------------------------------------------------------------
+    def _openai_manager(self, output_text="", error_text="", output_file_id=None, error_file_id=None):
+        manager = BatchJobManager(api_key="", provider_type="openai")
+        batch = SimpleNamespace(
+            status="completed",
+            output_file_id=output_file_id,
+            error_file_id=error_file_id,
+        )
+
+        def content(file_id):
+            if file_id == output_file_id:
+                return SimpleNamespace(text=output_text)
+            if file_id == error_file_id:
+                return SimpleNamespace(text=error_text)
+            return SimpleNamespace(text="")
+
+        manager.client = SimpleNamespace(
+            batches=SimpleNamespace(retrieve=lambda batch_id: batch),
+            files=SimpleNamespace(content=content),
+        )
+        return manager
+
+    def test_openai_success_error_mixed(self):
+        success_lines = "\n".join(
+            [
+                json.dumps({"custom_id": "s1", "response": {"body": {"ok": 1}}}),
+                json.dumps({"custom_id": "s2", "response": {"body": {"ok": 2}}}),
+            ]
+        )
+        error_lines = "\n".join(
+            [
+                json.dumps({"custom_id": "e1", "response": {"body": {"error": "boom"}}}),
+                json.dumps({"custom_id": "e2", "response": {"body": {"error": "bad"}}}),
+            ]
+        )
+
+        # Succès uniquement
+        mgr = self._openai_manager(output_text=success_lines, output_file_id="out")
+        res = mgr.get_results("batch")
+        assert [r.status for r in res] == ["succeeded", "succeeded"]
+        assert all(isinstance(r, BatchResult) for r in res)
+
+        # Erreurs uniquement
+        mgr = self._openai_manager(error_text=error_lines, error_file_id="err")
+        res = mgr.get_results("batch")
+        assert [r.status for r in res] == ["failed", "failed"]
+        assert res[0].error == {"error": "boom"}
+
+        # Mixte
+        mgr = self._openai_manager(
+            output_text=success_lines.split("\n")[0],
+            error_text=error_lines.split("\n")[0],
+            output_file_id="out",
+            error_file_id="err",
+        )
+        res = mgr.get_results("batch")
+        assert len(res) == 2
+        assert {r.status for r in res} == {"succeeded", "failed"}
+
+    # ------------------------------------------------------------------
+    # Anthropic
+    # ------------------------------------------------------------------
+    def _anthropic_manager(self, results_list):
+        manager = BatchJobManager(api_key="", provider_type="anthropic")
+        batch = SimpleNamespace(processing_status="ended")
+
+        manager.client = self._ns(
+            beta=self._ns(
+                messages=self._ns(
+                    batches=self._ns(
+                        retrieve=lambda batch_id: batch,
+                        results=lambda batch_id: results_list,
+                    )
+                )
+            )
+        )
+        return manager
+
+    def _success_result(self, custom_id):
+        message = self._ns(
+            content=[self._ns(text="ok")],
+            role="assistant",
+            model="claude",
+            usage=self._ns(input_tokens=1, output_tokens=1),
+        )
+        inner = self._ns(type="succeeded", message=message)
+        return self._ns(custom_id=custom_id, result=inner)
+
+    def _error_result(self, custom_id):
+        err = self._ns(message="bad request")
+        inner = self._ns(type="errored", error=err)
+        return self._ns(custom_id=custom_id, result=inner)
+
+    def test_anthropic_success_error_mixed(self):
+        # Succès uniquement
+        mgr = self._anthropic_manager([self._success_result("a1"), self._success_result("a2")])
+        res = mgr.get_results("batch")
+        assert [r.status for r in res] == ["succeeded", "succeeded"]
+        assert all(isinstance(r, BatchResult) for r in res)
+
+        # Erreurs uniquement
+        mgr = self._anthropic_manager([self._error_result("a1"), self._error_result("a2")])
+        res = mgr.get_results("batch")
+        assert [r.status for r in res] == ["failed", "failed"]
+        assert "bad request" in res[0].error["message"]
+
+        # Mixte
+        mgr = self._anthropic_manager([self._success_result("a1"), self._error_result("a2")])
+        res = mgr.get_results("batch")
+        assert len(res) == 2
+        assert {r.status for r in res} == {"succeeded", "failed"}
 
 
 # =============================================================================
