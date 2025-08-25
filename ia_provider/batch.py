@@ -10,6 +10,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Any
 from datetime import datetime
+from pathlib import Path
+
 from .core import APIError
 
 # Import des bibliothèques
@@ -24,11 +26,7 @@ except ImportError:
     anthropic = None
 
 
-# ============================================================================
-# Utilitaires de persistance de l'historique des lots
-# ============================================================================
-
-HISTORY_FILE = "batch_history.json"
+HISTORY_FILE = Path("batch_history.json")
 
 
 def _load_local_batch_history() -> List[Dict]:
@@ -36,18 +34,20 @@ def _load_local_batch_history() -> List[Dict]:
 
     Retourne une liste vide si le fichier est absent ou invalide.
     """
+    path = Path(HISTORY_FILE)
     try:
-        with open(HISTORY_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
+        if path.exists():
+            data = json.loads(path.read_text(encoding="utf-8"))
             if isinstance(data, list):
                 return data
-    except (FileNotFoundError, json.JSONDecodeError, TypeError):
+    except (json.JSONDecodeError, TypeError):
         pass
     return []
 
 
 def _save_batch_to_local_history(batch_id: str, provider: str) -> None:
     """Ajoute un lot soumis à l'historique local sans créer de doublon."""
+    path = Path(HISTORY_FILE)
     history = _load_local_batch_history()
 
     if any(item.get("id") == batch_id for item in history):
@@ -56,12 +56,12 @@ def _save_batch_to_local_history(batch_id: str, provider: str) -> None:
     new_entry = {
         "id": batch_id,
         "provider": provider,
+        "status": "running",
         "submitted_at": datetime.now().isoformat(),
     }
     history.insert(0, new_entry)
     try:
-        with open(HISTORY_FILE, "w", encoding="utf-8") as f:
-            json.dump(history, f, indent=4)
+        path.write_text(json.dumps(history, indent=4), encoding="utf-8")
     except Exception:
         pass
 
@@ -292,13 +292,16 @@ class BatchJobManager:
         provider = batch_info.get('provider', self.provider_type)
         raw_status = batch_info.get('status')
 
-        if provider == "anthropic":
+        # Si le statut est déjà dans le format unifié, le renvoyer directement
+        if raw_status in {"running", "completed", "failed"}:
+            unified_status = raw_status
+        elif provider == "anthropic":
             status_map = {
                 "ended": "completed",
                 "processing": "running",
                 "created": "running",
                 "expired": "failed",
-                "canceling": "failed",
+                "canceling": "running",
             }
             unified_status = status_map.get(raw_status, "unknown")
         else:  # OpenAI par défaut
@@ -348,16 +351,22 @@ class BatchJobManager:
     def get_history(self, limit: int = 50) -> List[Dict]:
         """
         Récupère l'historique des batches.
-        
+
         Args:
             limit: Nombre maximum de batches à récupérer
-            
+
         Returns:
             List[Dict]: Liste des batches avec leurs métadonnées
         """
+        local_entries: List[Dict[str, Any]] = []
+        for entry in _load_local_batch_history():
+            entry.setdefault("status", "running")
+            entry.setdefault("provider", self.provider_type)
+            local_entries.append(self._unify_status(entry))
+
         if not self.client:
-            return []
-        
+            return local_entries[:limit]
+
         try:
             if self.provider_type == "anthropic":
                 # API Anthropic pour lister les batches
@@ -400,11 +409,17 @@ class BatchJobManager:
                     }
                     batch_list.append(batch_info)
 
-            return [self._unify_status(batch) for batch in batch_list]
+            unified_api = [self._unify_status(batch) for batch in batch_list]
+
+            combined = {entry['id']: entry for entry in local_entries}
+            for batch in unified_api:
+                combined[batch['id']] = batch
+
+            return list(combined.values())[:limit]
 
         except Exception as e:
             print(f"❌ Erreur récupération historique: {str(e)}")
-            return []
+            return local_entries
     
     def get_status(self, batch_id: str) -> Optional[Dict]:
         """
@@ -493,13 +508,16 @@ class BatchJobManager:
                     if result.result.type == "succeeded":
                         message = result.result.message
                         content = ""
-                        if getattr(message, "content", None):
-                            first = message.content[0]
-                            content = (
-                                first.text if hasattr(first, "text") else first.get("text", "")
-                            )
+                        try:
+                            if getattr(message, "content", None):
+                                first = message.content[0]
+                                content = (
+                                    first.text if hasattr(first, "text") else first.get("text", "")
+                                )
+                        except (KeyError, IndexError, TypeError, AttributeError) as e:
+                            content = f"Erreur lors du parsage de la réponse : {e}"
 
-                        response = {"content": content, "role": message.role}
+                        response = {"content": content, "role": getattr(message, 'role', '')}
                         raw = result.model_dump() if hasattr(result, "model_dump") else {}
                         results.append(
                             BatchResult(
@@ -547,15 +565,12 @@ class BatchJobManager:
                     except json.JSONDecodeError:
                         continue
                     response_body = data.get("response", {}).get("body", {})
-                    clean_content = None
-                    if isinstance(response_body, dict):
-                        choices = response_body.get("choices")
-                        if choices:
-                            first_choice = choices[0]
-                            if isinstance(first_choice, dict):
-                                message = first_choice.get("message", {})
-                                if isinstance(message, dict):
-                                    clean_content = message.get("content")
+                    clean_content: Optional[str] = None
+                    try:
+                        if isinstance(response_body, dict):
+                            clean_content = response_body["choices"][0]["message"]["content"]
+                    except (KeyError, IndexError, TypeError) as e:
+                        clean_content = f"Erreur lors du parsage de la réponse : {e}"
                     results.append(
                         BatchResult(
                             custom_id=data.get("custom_id"),

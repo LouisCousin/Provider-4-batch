@@ -22,7 +22,6 @@ try:
         BatchRequest,
         BatchJobManager,
         BatchResult,
-        _load_local_batch_history,
     )
 except ImportError:
     st.error("Module ia_provider non trouvé. Assurez-vous que le package ia_provider est dans le même dossier.")
@@ -520,40 +519,36 @@ st.divider()
 with st.expander("Suivi des lots (Batches)"):
     st.subheader("Historique des tâches de fond")
 
-    # Afficher immédiatement l'historique local si disponible
-    local_history = _load_local_batch_history()
-    if local_history:
-        st.caption("Historique local des soumissions :")
-        st.dataframe(local_history)
-
     provider_type_for_batch = get_model_provider_name(selected_model).lower()
     if provider_type_for_batch not in {"openai", "anthropic"}:
         provider_type_for_batch = "openai"
-    api_key_for_batch = get_api_key(selected_model)
+    api_key_for_batch = get_api_key(selected_model) or ""
+
+    batch_manager = BatchJobManager(
+        api_key=api_key_for_batch, provider_type=provider_type_for_batch
+    )
+
+    if "batch_history" not in st.session_state:
+        st.session_state["batch_history"] = batch_manager.get_history(limit=20)
+
+    if st.button("🔄 Rafraîchir l'historique complet (via API)"):
+        try:
+            with st.spinner("Récupération de l'historique..."):
+                st.session_state["batch_history"] = batch_manager.get_history(limit=20)
+        except Exception as e:
+            st.error(f"Impossible de récupérer l'historique : {e}")
 
     if not api_key_for_batch:
-        st.warning("Veuillez fournir une clé API pour afficher l'historique complet (via API).")
-    else:
-        batch_manager = BatchJobManager(
-            api_key=api_key_for_batch, provider_type=provider_type_for_batch
+        st.warning(
+            "Veuillez fournir une clé API pour un suivi complet via API. Affichage de l'historique local uniquement."
         )
 
-        if "batch_history" not in st.session_state:
-            st.session_state["batch_history"] = []
+    history = st.session_state["batch_history"]
 
-        if st.button("🔄 Rafraîchir l'historique complet (via API)"):
-            try:
-                with st.spinner("Récupération de l'historique..."):
-                    st.session_state["batch_history"] = batch_manager.get_history(limit=20)
-            except Exception as e:
-                st.error(f"Impossible de récupérer l'historique : {e}")
-
-        history = st.session_state["batch_history"]
-
-        if not history:
-            st.info("Aucun lot trouvé.")
-        else:
-            for batch in history:
+    if not history:
+        st.info("Aucun lot trouvé.")
+    else:
+        for batch in history:
                 st.markdown("---")
                 col1, col2, col3 = st.columns([2, 1, 1])
 
