@@ -561,6 +561,14 @@ with st.expander("Suivi des lots (Batches)"):
                     st.write(f"**ID :** `{batch['id']}`")
                     st.caption(f"Créé le : {batch.get('created_at', 'N/A')}")
                     st.caption(f"Fournisseur : {batch.get('provider', 'N/A').capitalize()}")
+                    if batch.get('request_counts'):
+                        counts = batch['request_counts']
+                        total = counts.get('total', 'N/A')
+                        succeeded = counts.get('succeeded', 'N/A')
+                        failed = counts.get('errored', counts.get('failed', 'N/A'))
+                        st.caption(
+                            f"Requêtes : {succeeded} succès / {failed} échecs sur {total} total"
+                        )
 
                 with col2:
                     status = batch.get('unified_status', 'unknown').upper()
@@ -588,8 +596,14 @@ with st.expander("Suivi des lots (Batches)"):
                         if results:
                             for res in results:
                                 if res.status == 'succeeded':
-                                    with st.expander(f"✅ Succès : {res.custom_id}", expanded=False):
-                                        st.json(res.response)
+                                    with st.expander(f"✅ Succès : {res.custom_id}", expanded=True):
+                                        if getattr(res, 'clean_response', None):
+                                            st.markdown("**Réponse extraite :**")
+                                            st.markdown(res.clean_response)
+                                            with st.expander("Voir la réponse JSON brute"):
+                                                st.json(res.response)
+                                        else:
+                                            st.json(res.response)
                                 else:
                                     with st.expander(f"❌ Échec : {res.custom_id}", expanded=True):
                                         st.json(res.error)

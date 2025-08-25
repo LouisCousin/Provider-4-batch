@@ -100,6 +100,7 @@ class BatchResult:
     status: str  # 'succeeded' ou 'failed'
     response: Optional[Dict] = None
     error: Optional[Dict] = None
+    clean_response: Optional[str] = None
     provider: str = "unknown"
     raw_data: Dict = field(default_factory=dict)
 
@@ -313,7 +314,37 @@ class BatchJobManager:
 
         batch_info['unified_status'] = unified_status
         return batch_info
-    
+
+    def _extract_request_counts(self, rc: Any, provider: str) -> Optional[Dict[str, Any]]:
+        """Normalise l'objet ``request_counts`` selon le provider."""
+        if not rc:
+            return None
+
+        def _get(obj: Any, name: str) -> Any:
+            if isinstance(obj, dict):
+                return obj.get(name)
+            return getattr(obj, name, None)
+
+        counts = {
+            'total': _get(rc, 'total'),
+            'processing': _get(rc, 'processing'),
+            'succeeded': _get(rc, 'succeeded'),
+            'errored': _get(rc, 'errored'),
+            'canceled': _get(rc, 'canceled'),
+        }
+
+        if provider != 'anthropic':
+            # OpenAI utilise 'completed' et 'failed'
+            completed = _get(rc, 'completed')
+            failed = _get(rc, 'failed')
+            if completed is not None:
+                counts['succeeded'] = completed
+            if failed is not None:
+                counts['errored'] = failed
+
+        # Retirer les entrées None pour alléger la structure
+        return {k: v for k, v in counts.items() if v is not None}
+
     def get_history(self, limit: int = 50) -> List[Dict]:
         """
         Récupère l'historique des batches.
@@ -339,13 +370,10 @@ class BatchJobManager:
                         'status': batch.processing_status,
                         'processing_status': batch.processing_status,
                         'created_at': batch.created_at,
-                        'request_counts': {
-                            'total': batch.request_counts.total,
-                            'processing': batch.request_counts.processing,
-                            'succeeded': batch.request_counts.succeeded,
-                            'errored': batch.request_counts.errored,
-                            'canceled': batch.request_counts.canceled
-                        } if hasattr(batch, 'request_counts') else None,
+                        'request_counts': self._extract_request_counts(
+                            getattr(batch, 'request_counts', None),
+                            'anthropic'
+                        ),
                         'provider': 'anthropic'
                     }
                     batch_list.append(batch_info)
@@ -361,7 +389,10 @@ class BatchJobManager:
                         'created_at': datetime.fromtimestamp(batch.created_at).strftime("%Y-%m-%d %H:%M:%S"),
                         'endpoint': batch.endpoint,
                         'completion_window': batch.completion_window,
-                        'request_counts': getattr(batch, 'request_counts', None),
+                        'request_counts': self._extract_request_counts(
+                            getattr(batch, 'request_counts', None),
+                            'openai'
+                        ),
                         'output_file_id': getattr(batch, 'output_file_id', None),
                         'error_file_id': getattr(batch, 'error_file_id', None),
                         'metadata': getattr(batch, 'metadata', {}),
@@ -399,13 +430,10 @@ class BatchJobManager:
                     'processing_status': batch.processing_status,
                     'created_at': batch.created_at,
                     'expires_at': batch.expires_at,
-                    'request_counts': {
-                        'total': batch.request_counts.total,
-                        'processing': batch.request_counts.processing,
-                        'succeeded': batch.request_counts.succeeded,
-                        'errored': batch.request_counts.errored,
-                        'canceled': batch.request_counts.canceled
-                    } if hasattr(batch, 'request_counts') else None,
+                    'request_counts': self._extract_request_counts(
+                        getattr(batch, 'request_counts', None),
+                        'anthropic'
+                    ),
                     'results_url': getattr(batch, 'results_url', None),
                     'provider': 'anthropic'
                 }
@@ -422,7 +450,10 @@ class BatchJobManager:
                     'created_at': datetime.fromtimestamp(batch.created_at).strftime("%Y-%m-%d %H:%M:%S"),
                     'endpoint': batch.endpoint,
                     'completion_window': batch.completion_window,
-                    'request_counts': getattr(batch, 'request_counts', None),
+                    'request_counts': self._extract_request_counts(
+                        getattr(batch, 'request_counts', None),
+                        'openai'
+                    ),
                     'output_file_id': getattr(batch, 'output_file_id', None),
                     'error_file_id': getattr(batch, 'error_file_id', None),
                     'input_file_id': getattr(batch, 'input_file_id', None),
@@ -475,6 +506,7 @@ class BatchJobManager:
                                 custom_id=result.custom_id,
                                 status="succeeded",
                                 response=response,
+                                clean_response=content,
                                 provider="anthropic",
                                 raw_data=raw,
                             )
@@ -514,11 +546,22 @@ class BatchJobManager:
                         data = json.loads(line)
                     except json.JSONDecodeError:
                         continue
+                    response_body = data.get("response", {}).get("body", {})
+                    clean_content = None
+                    if isinstance(response_body, dict):
+                        choices = response_body.get("choices")
+                        if choices:
+                            first_choice = choices[0]
+                            if isinstance(first_choice, dict):
+                                message = first_choice.get("message", {})
+                                if isinstance(message, dict):
+                                    clean_content = message.get("content")
                     results.append(
                         BatchResult(
                             custom_id=data.get("custom_id"),
                             status="succeeded",
-                            response=data.get("response", {}).get("body"),
+                            response=response_body,
+                            clean_response=clean_content,
                             provider="openai",
                             raw_data=data,
                         )
