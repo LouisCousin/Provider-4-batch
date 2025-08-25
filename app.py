@@ -18,7 +18,12 @@ from typing import Optional, List, Dict
 # Import du module IA Provider (changement d'import)
 try:
     from ia_provider import manager, APIError, UnknownModelError
-    from ia_provider.batch import BatchRequest, BatchJobManager, _load_local_batch_history
+    from ia_provider.batch import (
+        BatchRequest,
+        BatchJobManager,
+        BatchResult,
+        _load_local_batch_history,
+    )
 except ImportError:
     st.error("Module ia_provider non trouvé. Assurez-vous que le package ia_provider est dans le même dossier.")
     st.stop()
@@ -527,14 +532,18 @@ with st.expander("Suivi des lots (Batches)"):
     if not api_key_for_batch:
         st.warning("Veuillez fournir une clé API pour afficher l'historique complet (via API).")
     else:
+        batch_manager = BatchJobManager(
+            api_key=api_key_for_batch, provider_type=provider_type_for_batch
+        )
+
         if st.button("🔄 Rafraîchir l'historique complet (via API)"):
             try:
                 with st.spinner("Récupération de l'historique..."):
-                    batch_manager = BatchJobManager(api_key=api_key_for_batch, provider_type=provider_type_for_batch)
                     history = batch_manager.get_history(limit=20)
 
                     if history:
                         import pandas as pd
+
                         df = pd.DataFrame(history)
                         # Afficher le statut unifié pour masquer les spécificités des providers
                         if 'unified_status' in df.columns:
@@ -545,6 +554,31 @@ with st.expander("Suivi des lots (Batches)"):
                         st.info("Aucun lot trouvé pour ce provider.")
             except Exception as e:
                 st.error(f"Impossible de récupérer l'historique : {e}")
+
+        batch_id_input = st.text_input("ID de lot à inspecter")
+        if st.button("📥 Obtenir les résultats") and batch_id_input:
+            try:
+                with st.spinner("Récupération des résultats..."):
+                    results = batch_manager.get_results(batch_id_input)
+
+                if results:
+                    for res in results:
+                        if res.status == 'succeeded':
+                            st.markdown(
+                                f"<div class='success-box'><strong>{res.custom_id}</strong></div>",
+                                unsafe_allow_html=True,
+                            )
+                            st.json(res.response)
+                        else:
+                            st.markdown(
+                                f"<div class='error-box'><strong>{res.custom_id}</strong></div>",
+                                unsafe_allow_html=True,
+                            )
+                            st.json(res.error)
+                else:
+                    st.info("Aucun résultat disponible pour ce lot.")
+            except Exception as e:
+                st.error(f"Impossible de récupérer les résultats : {e}")
 
 # Footer
 st.divider()

@@ -7,7 +7,7 @@ Fournit les briques pour soumettre et gérer des batches OpenAI.
 import io
 import json
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Any
 from datetime import datetime
 from .core import APIError
@@ -86,6 +86,22 @@ class BatchRequest:
             raise ValueError("method doit être POST ou GET")
         if not self.body:
             raise ValueError("body ne peut pas être vide")
+
+
+# =============================================================================
+# Structure standardisée de résultat de batch
+# =============================================================================
+
+@dataclass
+class BatchResult:
+    """Représente un résultat standardisé d'une requête de lot."""
+
+    custom_id: str
+    status: str  # 'succeeded' ou 'failed'
+    response: Optional[Dict] = None
+    error: Optional[Dict] = None
+    provider: str = "unknown"
+    raw_data: Dict = field(default_factory=dict)
 
 
 # =============================================================================
@@ -415,116 +431,114 @@ class BatchJobManager:
             print(f"❌ Erreur recherche batch {batch_id}: {str(e)}")
             return None
     
-    def get_results(self, batch_id: str, clean_json: bool = True) -> List[Dict]:
+    def get_results(self, batch_id: str, clean_json: bool = True) -> List[BatchResult]:
+        """Télécharge et parse les résultats d'un batch.
+
+        Retourne toujours une liste de ``BatchResult`` où chaque élément
+        représente soit un succès soit une erreur associée à une requête du lot.
         """
-        Télécharge, parse et nettoie les résultats d'un batch terminé.
-        
-        Args:
-            batch_id: ID du batch
-            clean_json: Si True, nettoie les marqueurs ```json dans les réponses
-            
-        Returns:
-            List[Dict]: Liste des résultats parsés
-        """
+
         if not self.client:
             return []
-        
+
         try:
+            results: List[BatchResult] = []
+
             if self.provider_type == "anthropic":
-                # API Anthropic
                 batch = self.client.beta.messages.batches.retrieve(batch_id)
-                
                 if batch.processing_status != "ended":
-                    print(f"⚠️ Batch {batch_id} non terminé (statut: {batch.processing_status})")
+                    print(
+                        f"⚠️ Batch {batch_id} non terminé (statut: {batch.processing_status})"
+                    )
                     return []
-                
-                # Pour Anthropic, on doit itérer sur les résultats
-                results = []
+
                 for result in self.client.beta.messages.batches.results(batch_id):
                     if result.result.type == "succeeded":
                         message = result.result.message
-                        # Extraire le contenu du message
-                        content = message.content[0].text if message.content else ""
-                        
-                        results.append({
-                            'custom_id': result.custom_id,
-                            'content': content,
-                            'role': message.role,
-                            'model': message.model,
-                            'usage': {
-                                'input_tokens': message.usage.input_tokens,
-                                'output_tokens': message.usage.output_tokens
-                            } if hasattr(message, 'usage') else None
-                        })
+                        content = ""
+                        if getattr(message, "content", None):
+                            first = message.content[0]
+                            content = (
+                                first.text if hasattr(first, "text") else first.get("text", "")
+                            )
+
+                        response = {"content": content, "role": message.role}
+                        raw = result.model_dump() if hasattr(result, "model_dump") else {}
+                        results.append(
+                            BatchResult(
+                                custom_id=result.custom_id,
+                                status="succeeded",
+                                response=response,
+                                provider="anthropic",
+                                raw_data=raw,
+                            )
+                        )
                     elif result.result.type == "errored":
-                        print(f"⚠️ Erreur pour {result.custom_id}: {result.result.error}")
-                
-                print(f"✅ {len(results)} résultats extraits du batch Anthropic {batch_id}")
+                        error_obj = getattr(result.result, "error", None)
+                        error = (
+                            error_obj.model_dump()
+                            if hasattr(error_obj, "model_dump")
+                            else getattr(error_obj, "__dict__", {"message": str(error_obj)})
+                        )
+                        raw = result.model_dump() if hasattr(result, "model_dump") else {}
+                        results.append(
+                            BatchResult(
+                                custom_id=result.custom_id,
+                                status="failed",
+                                error=error,
+                                provider="anthropic",
+                                raw_data=raw,
+                            )
+                        )
+
                 return results
-                
-            else:
-                # API OpenAI (code existant)
-                batch = self.client.batches.retrieve(batch_id)
-                
-                if batch.status != "completed":
-                    print(f"⚠️ Batch {batch_id} non terminé (statut: {batch.status})")
-                    return []
-                
-                if not batch.output_file_id:
-                    print(f"⚠️ Pas de fichier de résultats pour le batch {batch_id}")
-                    return []
-                
-                # Téléchargement du fichier de résultats
-                result_content = self.client.files.content(batch.output_file_id)
-                results = []
-                
-                # Parse JSONL ligne par ligne
-                for line in result_content.text.strip().split('\n'):
+
+            # Provider OpenAI par défaut
+            batch = self.client.batches.retrieve(batch_id)
+            if batch.status != "completed":
+                print(f"⚠️ Batch {batch_id} non terminé (statut: {batch.status})")
+                return []
+
+            if getattr(batch, "output_file_id", None):
+                success_content = self.client.files.content(batch.output_file_id).text
+                for line in success_content.strip().split("\n"):
                     if not line.strip():
                         continue
-                    
                     try:
-                        result_data = json.loads(line)
-                        
-                        # Extraire la réponse du format OpenAI
-                        if 'response' in result_data:
-                            response_body = result_data.get('response', {}).get('body', {})
-                            if response_body.get('choices'):
-                                content = response_body['choices'][0]['message']['content']
-                                
-                                # Nettoyage optionnel des marqueurs de code
-                                if clean_json:
-                                    content = content.strip()
-                                    if content.startswith('```json'):
-                                        content = content[7:]
-                                        if content.endswith('```'):
-                                            content = content[:-3]
-                                    elif content.startswith('```'):
-                                        content = content[3:]
-                                        if content.endswith('```'):
-                                            content = content[:-3]
-                                
-                                # Parser le contenu JSON si possible
-                                try:
-                                    parsed_content = json.loads(content)
-                                    if isinstance(parsed_content, list):
-                                        results.extend(parsed_content)
-                                    else:
-                                        results.append(parsed_content)
-                                except json.JSONDecodeError:
-                                    # Si ce n'est pas du JSON, ajouter le contenu brut
-                                    results.append({
-                                        'custom_id': result_data.get('custom_id'),
-                                        'content': content
-                                    })
-                        
-                    except json.JSONDecodeError as e:
-                        print(f"⚠️ Erreur parsing ligne: {e}")
+                        data = json.loads(line)
+                    except json.JSONDecodeError:
                         continue
-                
-                print(f"✅ {len(results)} résultats extraits du batch OpenAI {batch_id}")
-                return results
-            
+                    results.append(
+                        BatchResult(
+                            custom_id=data.get("custom_id"),
+                            status="succeeded",
+                            response=data.get("response", {}).get("body"),
+                            provider="openai",
+                            raw_data=data,
+                        )
+                    )
+
+            if getattr(batch, "error_file_id", None):
+                error_content = self.client.files.content(batch.error_file_id).text
+                for line in error_content.strip().split("\n"):
+                    if not line.strip():
+                        continue
+                    try:
+                        data = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    results.append(
+                        BatchResult(
+                            custom_id=data.get("custom_id"),
+                            status="failed",
+                            error=data.get("response", {}).get("body"),
+                            provider="openai",
+                            raw_data=data,
+                        )
+                    )
+
+            return results
+
         except Exception as e:
             print(f"❌ Erreur téléchargement résultats: {str(e)}")
             return []
