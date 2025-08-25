@@ -466,6 +466,104 @@ class TestUtilities:
 
 
 # =============================================================================
+# Tests de persistance de l'historique des lots
+# =============================================================================
+
+class TestBatchHistoryPersistence:
+    """Tests pour la sauvegarde et le chargement de l'historique local."""
+
+    def test_save_and_load_history(self, tmp_path, monkeypatch):
+        import ia_provider.batch as batch_module
+        history_file = tmp_path / "batch_history.json"
+        monkeypatch.setattr(batch_module, "HISTORY_FILE", str(history_file))
+
+        batch_module._save_batch_to_local_history("b123", "openai")
+        history = batch_module._load_local_batch_history()
+        assert len(history) == 1
+        assert history[0]["id"] == "b123"
+        assert history[0]["provider"] == "openai"
+        assert "submitted_at" in history[0]
+
+        # Vérifier l'absence de duplication
+        batch_module._save_batch_to_local_history("b123", "openai")
+        assert len(batch_module._load_local_batch_history()) == 1
+
+    def test_load_history_returns_empty_on_error(self, tmp_path, monkeypatch):
+        import ia_provider.batch as batch_module
+        history_file = tmp_path / "batch_history.json"
+        monkeypatch.setattr(batch_module, "HISTORY_FILE", str(history_file))
+
+        # Fichier manquant
+        assert batch_module._load_local_batch_history() == []
+
+        # Fichier JSON invalide
+        history_file.write_text("{invalid")
+        assert batch_module._load_local_batch_history() == []
+
+
+class TestSubmitBatchPersists:
+    """Tests que les mixins sauvegardent l'historique lors de la soumission."""
+
+    def test_openai_submit_batch_calls_save(self, monkeypatch):
+        import ia_provider.batch as batch_module
+
+        class Dummy(batch_module.OpenAIBatchMixin):
+            pass
+
+        dummy = Dummy()
+        dummy.client = SimpleNamespace(
+            files=SimpleNamespace(create=lambda file, purpose: SimpleNamespace(id="file_1")),
+            batches=SimpleNamespace(
+                create=lambda input_file_id, endpoint, completion_window, metadata: SimpleNamespace(id="batch_1")
+            ),
+        )
+
+        called = {}
+
+        def fake_save(batch_id, provider):
+            called["id"] = batch_id
+            called["provider"] = provider
+
+        monkeypatch.setattr(batch_module, "_save_batch_to_local_history", fake_save)
+
+        req = batch_module.BatchRequest(custom_id="1", body={"model": "gpt-4.1", "messages": []})
+        returned_id = dummy.submit_batch([req])
+        assert returned_id == "batch_1"
+        assert called == {"id": "batch_1", "provider": "openai"}
+
+    def test_anthropic_submit_batch_calls_save(self, monkeypatch):
+        import ia_provider.batch as batch_module
+
+        class Dummy(batch_module.AnthropicBatchMixin):
+            pass
+
+        dummy = Dummy()
+        dummy.model_name = "claude"
+        dummy.client = SimpleNamespace(
+            beta=SimpleNamespace(
+                messages=SimpleNamespace(
+                    batches=SimpleNamespace(
+                        create=lambda requests: SimpleNamespace(id="batch_a1")
+                    )
+                )
+            )
+        )
+
+        called = {}
+
+        def fake_save(batch_id, provider):
+            called["id"] = batch_id
+            called["provider"] = provider
+
+        monkeypatch.setattr(batch_module, "_save_batch_to_local_history", fake_save)
+
+        req = batch_module.BatchRequest(custom_id="1", body={"messages": [], "model": "claude", "max_tokens": 10})
+        returned_id = dummy.submit_batch([req])
+        assert returned_id == "batch_a1"
+        assert called == {"id": "batch_a1", "provider": "anthropic"}
+
+
+# =============================================================================
 # Point d'entrée pour pytest
 # =============================================================================
 

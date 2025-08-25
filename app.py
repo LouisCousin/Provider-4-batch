@@ -18,7 +18,7 @@ from typing import Optional, List, Dict
 # Import du module IA Provider (changement d'import)
 try:
     from ia_provider import manager, APIError, UnknownModelError
-    from ia_provider.batch import BatchRequest, BatchJobManager
+    from ia_provider.batch import BatchRequest, BatchJobManager, _load_local_batch_history
 except ImportError:
     st.error("Module ia_provider non trouvé. Assurez-vous que le package ia_provider est dans le même dossier.")
     st.stop()
@@ -515,13 +515,19 @@ st.divider()
 with st.expander("Suivi des lots (Batches)"):
     st.subheader("Historique des tâches de fond")
 
+    # Afficher immédiatement l'historique local si disponible
+    local_history = _load_local_batch_history()
+    if local_history:
+        st.caption("Historique local des soumissions :")
+        st.dataframe(local_history)
+
     provider_type_for_batch = get_model_provider_name(selected_model).lower()
     api_key_for_batch = get_api_key(selected_model)
 
     if not api_key_for_batch:
-        st.warning("Veuillez fournir une clé API pour afficher l'historique des lots.")
+        st.warning("Veuillez fournir une clé API pour afficher l'historique complet (via API).")
     else:
-        if st.button("🔄 Rafraîchir l'historique"):
+        if st.button("🔄 Rafraîchir l'historique complet (via API)"):
             try:
                 with st.spinner("Récupération de l'historique..."):
                     batch_manager = BatchJobManager(api_key=api_key_for_batch, provider_type=provider_type_for_batch)
