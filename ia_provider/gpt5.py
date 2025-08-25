@@ -136,9 +136,9 @@ class GPT5Provider(OpenAIBatchMixin, BaseProvider):
                 params_fallback = {
                     'max_completion_tokens': params.get('max_completion_tokens', 1000)
                 }
-                
+
                 # Si on était en mode minimal, ajouter les paramètres classiques
-                if params.get('reasoning_effort') == 'minimal':
+                if params.get('reasoning_effort') == 'minimal' and self.model_name != 'gpt-5-nano':
                     for key in ['temperature', 'top_p', 'frequency_penalty', 'presence_penalty']:
                         if key in params:
                             params_fallback[key] = params[key]
@@ -196,9 +196,9 @@ class GPT5Provider(OpenAIBatchMixin, BaseProvider):
                 params_fallback = {
                     'max_completion_tokens': params.get('max_completion_tokens', 1000)
                 }
-                
+
                 # Si on était en mode minimal, ajouter les paramètres classiques
-                if params.get('reasoning_effort') == 'minimal':
+                if params.get('reasoning_effort') == 'minimal' and self.model_name != 'gpt-5-nano':
                     for key in ['temperature', 'top_p', 'frequency_penalty', 'presence_penalty']:
                         if key in params:
                             params_fallback[key] = params[key]
