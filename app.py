@@ -561,6 +561,8 @@ with st.expander("Suivi des lots (Batches)"):
                 with st.spinner("Récupération des résultats..."):
                     results = batch_manager.get_results(batch_id_input)
 
+                # Chaque élément de ``results`` est un ``BatchResult`` décrivant
+                # le succès ou l'échec de la requête correspondante.
                 if results:
                     for res in results:
                         if res.status == 'succeeded':

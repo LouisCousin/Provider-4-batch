@@ -572,6 +572,10 @@ class TestSubmitBatchPersists:
 class TestBatchGetResults:
     """Vérifie que get_results retourne des ``BatchResult`` normalisés."""
 
+    # Les tests suivants s'assurent que chaque ligne de sortie d'un batch est
+    # transformée en instance de ``BatchResult`` comportant l'état et les
+    # données brutes associées.
+
     # ------------------------------------------------------------------
     # Utilitaires
     # ------------------------------------------------------------------
