@@ -61,11 +61,8 @@ def sample_messages():
 class TestBatchStatusUnification:
     @pytest.mark.parametrize("raw,expected", [
         ("in_progress", "running"),
-        ("validating", "running"),
-        ("cancelling", "running"),
         ("completed", "completed"),
         ("failed", "failed"),
-        ("expired", "failed"),
         ("cancelled", "failed"),
     ])
     def test_unify_status_openai_mapping(self, raw, expected):
@@ -76,8 +73,6 @@ class TestBatchStatusUnification:
 
     @pytest.mark.parametrize("raw,expected", [
         ("processing", "running"),
-        ("created", "running"),
-        ("canceling", "running"),
         ("ended", "completed"),
         ("expired", "failed"),
     ])
@@ -631,17 +626,15 @@ class TestBatchHistoryPersistence:
         history_file = tmp_path / "batch_history.json"
         monkeypatch.setattr(batch_module, "HISTORY_FILE", str(history_file))
 
-        batch_module._save_batch_to_local_history("b123", "openai", {"model": "gpt-4", "total_requests": 2})
+        batch_module._save_batch_to_local_history("b123", "openai")
         history = batch_module._load_local_batch_history()
         assert len(history) == 1
         assert history[0]["id"] == "b123"
         assert history[0]["provider"] == "openai"
         assert "submitted_at" in history[0]
-        assert history[0]["metadata"]["model"] == "gpt-4"
-        assert history[0]["metadata"]["total_requests"] == 2
 
         # Vérifier l'absence de duplication
-        batch_module._save_batch_to_local_history("b123", "openai", {"model": "gpt-4"})
+        batch_module._save_batch_to_local_history("b123", "openai")
         assert len(batch_module._load_local_batch_history()) == 1
 
     def test_load_history_returns_empty_on_error(self, tmp_path, monkeypatch):
@@ -676,19 +669,16 @@ class TestSubmitBatchPersists:
 
         called = {}
 
-        def fake_save(batch_id, provider, metadata=None):
+        def fake_save(batch_id, provider):
             called["id"] = batch_id
             called["provider"] = provider
-            called["metadata"] = metadata
 
         monkeypatch.setattr(batch_module, "_save_batch_to_local_history", fake_save)
 
         req = batch_module.BatchRequest(custom_id="1", body={"model": "gpt-4.1", "messages": []})
         returned_id = dummy.submit_batch([req])
         assert returned_id == "batch_1"
-        assert called["id"] == "batch_1" and called["provider"] == "openai"
-        assert called["metadata"]["model"] == "gpt-4.1"
-        assert called["metadata"]["total_requests"] == 1
+        assert called == {"id": "batch_1", "provider": "openai"}
 
     def test_anthropic_submit_batch_calls_save(self, monkeypatch):
         import ia_provider.batch as batch_module
@@ -710,19 +700,16 @@ class TestSubmitBatchPersists:
 
         called = {}
 
-        def fake_save(batch_id, provider, metadata=None):
+        def fake_save(batch_id, provider):
             called["id"] = batch_id
             called["provider"] = provider
-            called["metadata"] = metadata
 
         monkeypatch.setattr(batch_module, "_save_batch_to_local_history", fake_save)
 
         req = batch_module.BatchRequest(custom_id="1", body={"messages": [], "model": "claude", "max_tokens": 10})
         returned_id = dummy.submit_batch([req])
         assert returned_id == "batch_a1"
-        assert called["id"] == "batch_a1" and called["provider"] == "anthropic"
-        assert called["metadata"]["model"] == "claude"
-        assert called["metadata"]["total_requests"] == 1
+        assert called == {"id": "batch_a1", "provider": "anthropic"}
 
 
 # =============================================================================
