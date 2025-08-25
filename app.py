@@ -549,61 +549,75 @@ with st.expander("Suivi des lots (Batches)"):
         st.info("Aucun lot trouvé.")
     else:
         for batch in history:
-                st.markdown("---")
-                col1, col2, col3 = st.columns([2, 1, 1])
+            st.markdown("---")
+            col1, col2, col3 = st.columns([2, 1, 1])
 
-                with col1:
-                    st.write(f"**ID :** `{batch['id']}`")
-                    st.caption(f"Créé le : {batch.get('created_at', 'N/A')}")
-                    st.caption(f"Fournisseur : {batch.get('provider', 'N/A').capitalize()}")
-                    if batch.get('request_counts'):
-                        counts = batch['request_counts']
-                        total = counts.get('total', 'N/A')
-                        succeeded = counts.get('succeeded', 'N/A')
-                        failed = counts.get('errored', counts.get('failed', 'N/A'))
-                        st.caption(
-                            f"Requêtes : {succeeded} succès / {failed} échecs sur {total} total"
-                        )
+            with col1:
+                st.write(f"**ID :** `{batch['id']}`")
+                st.caption(f"Créé le : {batch.get('created_at', 'N/A')}")
+                provider_name = batch.get('provider', 'N/A').capitalize()
+                model_name = batch.get('metadata', {}).get('model', 'N/A')
+                st.caption(f"Fournisseur : {provider_name} | Modèle : {model_name}")
+                if batch.get('request_counts'):
+                    counts = batch['request_counts']
+                    total = counts.get('total', 'N/A')
+                    succeeded = counts.get('succeeded', 0)
+                    failed = counts.get('errored', counts.get('failed', 0))
+                    st.markdown(
+                        f"**Requêtes :** ✅ {succeeded} / ❌ {failed} / 📦 {total}"
+                    )
 
-                with col2:
-                    status = batch.get('unified_status', 'unknown').upper()
-                    st.metric("Statut", status)
+            with col2:
+                status_raw = batch.get('unified_status', 'unknown')
+                status_icons = {
+                    'running': '🟡 En cours',
+                    'completed': '✅ Terminé',
+                    'failed': '❌ Échec',
+                }
+                st.metric("Statut", status_icons.get(status_raw, '❔ Inconnu'))
 
-                with col3:
-                    state_key = f"details_{batch['id']}"
-                    if state_key not in st.session_state:
-                        st.session_state[state_key] = False
+            with col3:
+                state_key = f"details_{batch['id']}"
+                if state_key not in st.session_state:
+                    st.session_state[state_key] = False
 
-                    if st.button("Voir détails", key=f"details_btn_{batch['id']}"):
-                        st.session_state[state_key] = not st.session_state[state_key]
+                if st.button("Voir détails", key=f"details_btn_{batch['id']}"):
+                    st.session_state[state_key] = not st.session_state[state_key]
 
-                    if status == 'RUNNING':
-                        if st.button("Annuler", key=f"cancel_{batch['id']}", type="secondary"):
-                            if batch_manager.cancel_batch(batch['id']):
-                                st.success(f"Demande d'annulation pour le lot {batch['id']} envoyée.")
-                                st.rerun()
-                            else:
-                                st.error("Échec de l'annulation.")
-
-                if st.session_state[state_key]:
-                    with st.spinner(f"Récupération des résultats pour {batch['id']}..."):
-                        results = batch_manager.get_results(batch['id'])
-                        if results:
-                            for res in results:
-                                if res.status == 'succeeded':
-                                    with st.expander(f"✅ Succès : {res.custom_id}", expanded=True):
-                                        if getattr(res, 'clean_response', None):
-                                            st.markdown("**Réponse extraite :**")
-                                            st.markdown(res.clean_response)
-                                            with st.expander("Voir la réponse JSON brute"):
-                                                st.json(res.response)
-                                        else:
-                                            st.json(res.response)
-                                else:
-                                    with st.expander(f"❌ Échec : {res.custom_id}", expanded=True):
-                                        st.json(res.error)
+                if status_raw == 'running':
+                    if st.button("Annuler", key=f"cancel_{batch['id']}", type="secondary"):
+                        if batch_manager.cancel_batch(batch['id']):
+                            st.success(f"Demande d'annulation pour le lot {batch['id']} envoyée.")
+                            st.rerun()
                         else:
-                            st.info("Aucun résultat disponible pour ce lot (il est peut-être encore en cours).")
+                            st.error("Échec de l'annulation.")
+
+            if st.session_state[state_key]:
+                @st.cache_data(show_spinner=False)
+                def _cached_results(batch_id: str) -> List[BatchResult]:
+                    return batch_manager.get_results(batch_id)
+
+                with st.spinner(f"Récupération des résultats pour {batch['id']}..."):
+                    results = _cached_results(batch['id'])
+                    if results:
+                        for res in results:
+                            if res.status == 'succeeded':
+                                with st.expander(f"✅ Succès : {res.custom_id}", expanded=True):
+                                    if getattr(res, 'clean_response', None):
+                                        st.markdown("**Réponse extraite :**")
+                                        st.markdown(res.clean_response)
+                                        with st.expander("Voir la réponse JSON brute"):
+                                            st.json(res.response)
+                                    else:
+                                        st.json(res.response)
+                            else:
+                                with st.expander(f"❌ Échec : {res.custom_id}", expanded=True):
+                                    if isinstance(res.error, dict):
+                                        st.json(res.error)
+                                    else:
+                                        st.markdown(str(res.error))
+                    else:
+                        st.info("Aucun résultat disponible pour ce lot (il est peut-être encore en cours).")
 
 # Footer
 st.divider()
