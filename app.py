@@ -536,51 +536,63 @@ with st.expander("Suivi des lots (Batches)"):
             api_key=api_key_for_batch, provider_type=provider_type_for_batch
         )
 
+        if "batch_history" not in st.session_state:
+            st.session_state["batch_history"] = []
+
         if st.button("🔄 Rafraîchir l'historique complet (via API)"):
             try:
                 with st.spinner("Récupération de l'historique..."):
-                    history = batch_manager.get_history(limit=20)
-
-                    if history:
-                        import pandas as pd
-
-                        df = pd.DataFrame(history)
-                        # Afficher le statut unifié pour masquer les spécificités des providers
-                        if 'unified_status' in df.columns:
-                            st.dataframe(df[['id', 'unified_status', 'created_at', 'provider']])
-                        else:
-                            st.dataframe(df)
-                    else:
-                        st.info("Aucun lot trouvé pour ce provider.")
+                    st.session_state["batch_history"] = batch_manager.get_history(limit=20)
             except Exception as e:
                 st.error(f"Impossible de récupérer l'historique : {e}")
 
-        batch_id_input = st.text_input("ID de lot à inspecter")
-        if st.button("📥 Obtenir les résultats") and batch_id_input:
-            try:
-                with st.spinner("Récupération des résultats..."):
-                    results = batch_manager.get_results(batch_id_input)
+        history = st.session_state["batch_history"]
 
-                # Chaque élément de ``results`` est un ``BatchResult`` décrivant
-                # le succès ou l'échec de la requête correspondante.
-                if results:
-                    for res in results:
-                        if res.status == 'succeeded':
-                            st.markdown(
-                                f"<div class='success-box'><strong>{res.custom_id}</strong></div>",
-                                unsafe_allow_html=True,
-                            )
-                            st.json(res.response)
+        if not history:
+            st.info("Aucun lot trouvé.")
+        else:
+            for batch in history:
+                st.markdown("---")
+                col1, col2, col3 = st.columns([2, 1, 1])
+
+                with col1:
+                    st.write(f"**ID :** `{batch['id']}`")
+                    st.caption(f"Créé le : {batch.get('created_at', 'N/A')}")
+                    st.caption(f"Fournisseur : {batch.get('provider', 'N/A').capitalize()}")
+
+                with col2:
+                    status = batch.get('unified_status', 'unknown').upper()
+                    st.metric("Statut", status)
+
+                with col3:
+                    state_key = f"details_{batch['id']}"
+                    if state_key not in st.session_state:
+                        st.session_state[state_key] = False
+
+                    if st.button("Voir détails", key=f"details_btn_{batch['id']}"):
+                        st.session_state[state_key] = not st.session_state[state_key]
+
+                    if status == 'RUNNING':
+                        if st.button("Annuler", key=f"cancel_{batch['id']}", type="secondary"):
+                            if batch_manager.cancel_batch(batch['id']):
+                                st.success(f"Demande d'annulation pour le lot {batch['id']} envoyée.")
+                                st.rerun()
+                            else:
+                                st.error("Échec de l'annulation.")
+
+                if st.session_state[state_key]:
+                    with st.spinner(f"Récupération des résultats pour {batch['id']}..."):
+                        results = batch_manager.get_results(batch['id'])
+                        if results:
+                            for res in results:
+                                if res.status == 'succeeded':
+                                    with st.expander(f"✅ Succès : {res.custom_id}", expanded=False):
+                                        st.json(res.response)
+                                else:
+                                    with st.expander(f"❌ Échec : {res.custom_id}", expanded=True):
+                                        st.json(res.error)
                         else:
-                            st.markdown(
-                                f"<div class='error-box'><strong>{res.custom_id}</strong></div>",
-                                unsafe_allow_html=True,
-                            )
-                            st.json(res.error)
-                else:
-                    st.info("Aucun résultat disponible pour ce lot.")
-            except Exception as e:
-                st.error(f"Impossible de récupérer les résultats : {e}")
+                            st.info("Aucun résultat disponible pour ce lot (il est peut-être encore en cours).")
 
 # Footer
 st.divider()
