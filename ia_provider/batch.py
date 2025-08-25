@@ -24,6 +24,48 @@ except ImportError:
     anthropic = None
 
 
+# ============================================================================
+# Utilitaires de persistance de l'historique des lots
+# ============================================================================
+
+HISTORY_FILE = "batch_history.json"
+
+
+def _load_local_batch_history() -> List[Dict]:
+    """Charge l'historique des lots depuis un fichier JSON local.
+
+    Retourne une liste vide si le fichier est absent ou invalide.
+    """
+    try:
+        with open(HISTORY_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            if isinstance(data, list):
+                return data
+    except (FileNotFoundError, json.JSONDecodeError, TypeError):
+        pass
+    return []
+
+
+def _save_batch_to_local_history(batch_id: str, provider: str) -> None:
+    """Ajoute un lot soumis à l'historique local sans créer de doublon."""
+    history = _load_local_batch_history()
+
+    if any(item.get("id") == batch_id for item in history):
+        return
+
+    new_entry = {
+        "id": batch_id,
+        "provider": provider,
+        "submitted_at": datetime.now().isoformat(),
+    }
+    history.insert(0, new_entry)
+    try:
+        with open(HISTORY_FILE, "w", encoding="utf-8") as f:
+            json.dump(history, f, indent=4)
+    except Exception:
+        pass
+
+
 # =============================================================================
 # Brique n°1 : Requête Batch standardisée
 # =============================================================================
@@ -110,6 +152,7 @@ class OpenAIBatchMixin:
                 metadata=metadata or {}
             )
             print(f"✅ Batch créé avec succès: {batch_job.id}")
+            _save_batch_to_local_history(batch_job.id, "openai")
             return batch_job.id
         except Exception as e:
             raise APIError(f"Échec de la création du batch: {e}")
@@ -171,10 +214,11 @@ class AnthropicBatchMixin:
             batch = self.client.beta.messages.batches.create(
                 requests=batch_requests
             )
-            
+
             print(f"✅ Batch Anthropic créé avec succès: {batch.id}")
+            _save_batch_to_local_history(batch.id, "anthropic")
             return batch.id
-            
+
         except Exception as e:
             raise APIError(f"Échec de la création du batch Anthropic: {e}")
 
