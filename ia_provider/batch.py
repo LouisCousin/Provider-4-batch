@@ -431,11 +431,12 @@ class BatchJobManager:
             print(f"❌ Erreur recherche batch {batch_id}: {str(e)}")
             return None
     
-    def get_results(self, batch_id: str, clean_json: bool = True) -> List[BatchResult]:
+    def get_results(self, batch_id: str) -> List[BatchResult]:
         """Télécharge et parse les résultats d'un batch.
 
-        Retourne toujours une liste de ``BatchResult`` où chaque élément
-        représente soit un succès soit une erreur associée à une requête du lot.
+        Chaque ligne des fichiers de sortie ou d'erreur est convertie en
+        ``BatchResult`` décrivant soit une réussite, soit une erreur pour la
+        requête identifiée par ``custom_id``.
         """
 
         if not self.client:
