@@ -292,19 +292,24 @@ class BatchJobManager:
         raw_status = batch_info.get('status')
 
         if provider == "anthropic":
-            if raw_status == "ended":
-                unified_status = "completed"
-            elif raw_status in ["processing", "created"]:
-                unified_status = "running"
-            elif raw_status in ["canceling", "expired"]:
-                unified_status = "failed"
+            status_map = {
+                "ended": "completed",
+                "processing": "running",
+                "created": "running",
+                "expired": "failed",
+                "canceling": "failed",
+            }
+            unified_status = status_map.get(raw_status, "unknown")
         else:  # OpenAI par défaut
-            if raw_status == "completed":
-                unified_status = "completed"
-            elif raw_status in ["validating", "in_progress"]:
-                unified_status = "running"
-            elif raw_status in ['failed', 'expired', 'cancelled']:
-                unified_status = "failed"
+            status_map = {
+                "completed": "completed",
+                "validating": "running",
+                "in_progress": "running",
+                "failed": "failed",
+                "expired": "failed",
+                "cancelled": "failed",
+            }
+            unified_status = status_map.get(raw_status, "unknown")
 
         batch_info['unified_status'] = unified_status
         return batch_info

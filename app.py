@@ -527,6 +527,8 @@ with st.expander("Suivi des lots (Batches)"):
         st.dataframe(local_history)
 
     provider_type_for_batch = get_model_provider_name(selected_model).lower()
+    if provider_type_for_batch not in {"openai", "anthropic"}:
+        provider_type_for_batch = "openai"
     api_key_for_batch = get_api_key(selected_model)
 
     if not api_key_for_batch:
